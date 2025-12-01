@@ -1,11 +1,10 @@
 """
-Telegram бот для общения с LLM через API
+Telegram бот, который соглашается с пользователем
 """
 import os
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from llm_client import LLMClient
 
 # Настройка логирования
 logging.basicConfig(
@@ -14,15 +13,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация клиента LLM
-llm_client = LLMClient()
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     await update.message.reply_text(
-        "Привет! Я бот, который может общаться с вами через LLM. "
-        "Просто отправьте мне сообщение, и я передам его в LLM и отправлю вам ответ."
+        "Привет! Я бот, который полностью согласен с тобой. "
+        "Просто отправь мне любое сообщение, и я отвечу, что полностью с тобой согласен."
     )
 
 
@@ -32,31 +28,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Доступные команды:\n"
         "/start - Начать работу с ботом\n"
         "/help - Показать эту справку\n\n"
-        "Просто отправьте любое сообщение, и я передам его в LLM."
+        "Просто отправь любое сообщение, и я отвечу, что полностью с тобой согласен."
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
-    user_message = update.message.text
-    
-    # Отправляем сообщение о том, что бот думает
-    thinking_message = await update.message.reply_text("Думаю...")
-    
-    try:
-        # Получаем ответ от LLM
-        llm_response = await llm_client.get_response(user_message)
-        
-        # Удаляем сообщение "Думаю..." и отправляем ответ
-        await thinking_message.delete()
-        await update.message.reply_text(llm_response)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при обработке сообщения: {e}")
-        await thinking_message.delete()
-        await update.message.reply_text(
-            f"Извините, произошла ошибка при обработке вашего запроса: {str(e)}"
-        )
+    # Просто отвечаем, что согласны
+    await update.message.reply_text("полностью с тобой согласен")
 
 
 def main():
