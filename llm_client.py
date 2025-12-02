@@ -1,5 +1,7 @@
 import os
 import asyncio
+import json
+import re
 from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -107,22 +109,81 @@ def get_openai_client():
         )
     return openai_client
 
+def create_prompt(user_message):
+    """Create a prompt with JSON format instruction"""
+    prompt = f"""
+
+    {user_message}
+
+    
+
+    Пожалуйста, верни ответ в следующем JSON формате:
+
+    {{
+
+        "response": "основной ответ на запрос",
+
+        "summary": "краткое резюме",
+
+        "keywords": ["ключевое", "слово", "список"],
+
+        "category": "категория запроса"
+
+    }}
+
+    
+
+    Ответ должен быть ТОЛЬКО в формате JSON, без дополнительного текста.
+
+    """
+    return prompt
+
 def _call_openai_sync(user_message: str, yandex_cloud_folder: str) -> str:
     """Synchronous wrapper for Yandex Cloud API call"""
     client = get_openai_client()
     model = f"gpt://{yandex_cloud_folder}/yandexgpt/latest"
+    
+    # Create prompt with JSON format instruction
+    formatted_prompt = create_prompt(user_message)
+    
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "user", "content": user_message}
+            {"role": "user", "content": formatted_prompt}
         ],
         temperature=0.3,
-        max_tokens=2000
+        max_tokens=2000,
+        response_format={"type": "json_object"}
     )
     return response.choices[0].message.content
 
+def parse_json_response(response_text: str) -> dict:
+    """Parse JSON response from LLM, handling potential formatting issues"""
+    try:
+        # Try to parse as-is
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        # Try to extract JSON from markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Try to find JSON object in the text
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        # If all parsing attempts fail, return None
+        return None
+
 async def get_llm_response(user_message: str) -> str:
-    """Send message to Yandex Cloud API and get response"""
+    """Send message to Yandex Cloud API and get JSON response"""
     try:
         yandex_cloud_folder = os.getenv("YANDEX_CLOUD_FOLDER")
         if not yandex_cloud_folder:
