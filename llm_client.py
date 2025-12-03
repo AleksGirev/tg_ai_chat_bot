@@ -1,7 +1,6 @@
+# -*- coding: utf-8 -*-
 import os
 import asyncio
-import json
-import re
 from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -109,81 +108,19 @@ def get_openai_client():
         )
     return openai_client
 
-def create_prompt(user_message):
-    """Create a prompt with JSON format instruction"""
-    prompt = f"""
-
-    {user_message}
-
-    
-
-    Пожалуйста, верни ответ в следующем JSON формате:
-
-    {{
-
-        "response": "основной ответ на запрос",
-
-        "summary": "краткое резюме",
-
-        "keywords": ["ключевое", "слово", "список"],
-
-        "category": "категория запроса"
-
-    }}
-
-    
-
-    Ответ должен быть ТОЛЬКО в формате JSON, без дополнительного текста.
-
-    """
-    return prompt
-
-def _call_openai_sync(user_message: str, yandex_cloud_folder: str) -> str:
+def _call_openai_sync(messages: list, yandex_cloud_folder: str) -> str:
     """Synchronous wrapper for Yandex Cloud API call"""
     client = get_openai_client()
     model = f"gpt://{yandex_cloud_folder}/yandexgpt/latest"
     
-    # Create prompt with JSON format instruction
-    formatted_prompt = create_prompt(user_message)
-    
     response = client.chat.completions.create(
         model=model,
-        messages=[
-            {"role": "user", "content": formatted_prompt}
-        ],
-        temperature=0.3,
-        max_tokens=2000,
-        response_format={"type": "json_object"}
+        messages=messages
     )
     return response.choices[0].message.content
 
-def parse_json_response(response_text: str) -> dict:
-    """Parse JSON response from LLM, handling potential formatting issues"""
-    try:
-        # Try to parse as-is
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        # Try to extract JSON from markdown code blocks
-        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError:
-                pass
-        
-        # Try to find JSON object in the text
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                pass
-        
-        # If all parsing attempts fail, return None
-        return None
-
-async def get_llm_response(user_message: str) -> str:
-    """Send message to Yandex Cloud API and get JSON response"""
+async def get_llm_response(messages: list) -> str:
+    """Send messages to Yandex Cloud API and get response"""
     try:
         yandex_cloud_folder = os.getenv("YANDEX_CLOUD_FOLDER")
         if not yandex_cloud_folder:
@@ -198,7 +135,7 @@ async def get_llm_response(user_message: str) -> str:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, _call_openai_sync, user_message, yandex_cloud_folder)
+        response = await loop.run_in_executor(None, _call_openai_sync, messages, yandex_cloud_folder)
         return response
     except Exception as e:
         print(f"❌ Ошибка при обращении к Yandex Cloud API: {e}")
@@ -206,6 +143,9 @@ async def get_llm_response(user_message: str) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"🟢 Команда /start от {update.effective_user.username}")
+    # Clear conversation history on /start
+    if 'conversation_history' in context.chat_data:
+        context.chat_data['conversation_history'] = []
     await update.message.reply_text("Добрый день! Я бот, который может отвечать на ваши вопросы. Как я могу помочь вам?")
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,8 +155,20 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send "typing" action to show bot is processing
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Get response from Yandex Cloud API
-    llm_response = await get_llm_response(user_message)
+    # Initialize conversation history if it doesn't exist
+    if 'conversation_history' not in context.chat_data:
+        context.chat_data['conversation_history'] = [
+            {"role": "system", "content": "Ты - профессиональный библиотекарь в электронной библиотеке. Твоя единственная задача - помогать пользователям с рекомендациями книг.\n\nПРАВИЛА РАБОТЫ:\n1. ОТКАЗ ОТ НЕРЕЛЕВАНТНЫХ ВОПРОСОВ: Если пользователь задает вопрос, не связанный с книгами или литературой, вежливо откажи и объясни, что ты можешь помочь только с рекомендациями книг.\n\n2. ОБЯЗАТЕЛЬНЫЕ ВОПРОСЫ ДЛЯ РЕКОМЕНДАЦИИ: Перед тем как дать рекомендацию, ты ДОЛЖЕН получить ответы на все три вопроса:\n   - Жанр литературы (фантастика, детектив, роман, научная литература и т.д.)\n   - Страна происхождения автора (Россия, США, Великобритания и т.д.)\n   - Чего пользователь ожидает от прочтения (развлечение, обучение, вдохновение, эскапизм и т.д.)\n\n3. СТРОГИЙ ЗАПРЕТ НА ПРЕЖДЕВРЕМЕННЫЕ РЕКОМЕНДАЦИИ: НИКОГДА не давай рекомендации, пока не получишь все три ответа. Даже если пользователь настаивает, просит или умоляет - оставайся твердым и продолжай задавать недостающие вопросы.\n\n4. ПОМОЩЬ С ВЫБОРОМ ЖАНРА: Если пользователь не знает жанров литературы, предложи ему список из 5-7 популярных жанров на выбор (например: фантастика, детектив, роман, классика, биография, научпоп, триллер).\n\n5. ПРОВЕРКА РЕЛЕВАНТНОСТИ: Убедись, что ответы пользователя логичны и релевантны. Если ответ неясен или странен, уточни его.\n\n6. СТИЛЬ ОБЩЕНИЯ: Будь дружелюбным, профессиональным и терпеливым. Задавай вопросы по одному, не перегружай пользователя. Здоровайся с пользователем, только если это первое ваше сообщение в эти сутки"}
+        ]
+    
+    # Add user message to conversation history
+    context.chat_data['conversation_history'].append({"role": "user", "content": user_message})
+    
+    # Get response from Yandex Cloud API with full conversation history
+    llm_response = await get_llm_response(context.chat_data['conversation_history'])
+    
+    # Add assistant response to conversation history
+    context.chat_data['conversation_history'].append({"role": "assistant", "content": llm_response})
     
     # Send response to user
     await update.message.reply_text(llm_response)
